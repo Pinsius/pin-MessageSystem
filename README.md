@@ -2,7 +2,7 @@
 
 This is generic message system written in C++ that I made for my game engine. It supports also variadic messages.
 
-###### How to use it
+#### How to use it
 
 Using it is very easy as it is a single header implementation. By including the header file, **Messages.hpp** you have access to the whole interface that is nested in the namespace **pin::** . It means that it is a part of a bigger set of tools with the same name as I plan to add more in the future.
 
@@ -15,8 +15,8 @@ Then there are **MessageHandlers**. They are the main objects that work and reac
 
 ![Picture of listening to messages and broadcasting them](http://oi64.tinypic.com/2q2itz9.jpg)
 
-###### Performance
+#### Performance
 It has a run-time checking for the validation of the passed message names and its parameters, so there is a slight overhead and consistent broadcasting is not recommended. 
 
-###### Error logging and assertions
+#### Error logging and assertions
 When you open the header file you can see two functions for your own behavior when it does not accept the parameters or the message name.
