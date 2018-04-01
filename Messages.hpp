@@ -1,50 +1,77 @@
 #pragma once
 
-/**
-    PinGUI
-    Copyright (c) 2017 Lubomir Barantal <l.pinsius@gmail.com>
-    This software is provided 'as-is', without any express or implied
-    warranty. In no event will the authors be held liable for any damages
-    arising from the use of this software.
-    Permission is granted to anyone to use this software for any purpose,
-    including commercial applications, and to alter it and redistribute it
-    freely, subject to the following restrictions:
-    1. The origin of this software must not be misrepresented; you must not
-       claim that you wrote the original software. If you use this software
-       in a product, an acknowledgment in the product documentation would be
-       appreciated but is not required.
-    2. Altered source versions must be plainly marked as such, and must not be
-       misrepresented as being the original software.
-    3. This notice may not be removed or altered from any source distribution.
-**/
-
 #include <vector>
 #include <unordered_map>
 #include <typeinfo>
 #include <functional>
-#include <utility>
 #include <algorithm>
 #include <memory>
+#include <stdexcept>
 
 namespace pin
 {
-	const std::string PIN_BLANK = "Blank";
+	const std::string BLANK_MESSAGE_NAME = "Blank";
 
-	//Variadic functor wrapper
+	//Base exception class for message system exceptions
+	class message_exception : public std::runtime_error 
+	{
+		public:
+			message_exception(const std::string& messageName):
+				std::runtime_error("Message system exception at message: " + messageName)
+			{}
+
+			message_exception(const std::string& messageName, const std::string& errorDescription) :
+				std::runtime_error("Message system exception at message: " + messageName + "-" + errorDescription)
+			{}
+	};
+
+	//exception thrown at bad parameters
+	class bad_message_parameters : public message_exception
+	{
+		public:
+			bad_message_parameters(const std::string& messageName) :
+				message_exception(messageName, "Bad message parameters") {};
+	};
+
+	//Exception thrown if no message with given name exists
+	class bad_message_name : public message_exception
+	{
+	public:
+		bad_message_name(const std::string& messageName) :
+			message_exception(messageName, "Bad message name") {};
+	};
+
+
+	//Base class for parameter pack so its able to combine it with polymorphism
+	class base_param_pack 
+	{
+		public:
+			virtual ~base_param_pack() {}
+	};
+
+	//Variadic parameter pack
 	template<class... Args>
-	class variadicFunction
+	class param_pack :public base_param_pack {};
+
+	//Variadic function wrapper
+	template<class... Args>
+	class VariadicFunction
 	{
 		private:
+			//Functor
 			std::function<void(Args...)> _function;
 
 		public:
+			VariadicFunction() {};
 
-			variadicFunction() {};
+			void bindFunction(std::function<void(Args...)> function)
+			{
+				_function = function;
+			}
 
 			template<class T>
 			void bindFunction(void(T::*function)(Args... args), T* ownerPtr)
 			{
-
 				//Saved via lambda to avoid generic placeholders with std::bind
 				_function = [function, ownerPtr](Args... args)
 				{
@@ -52,19 +79,12 @@ namespace pin
 				};
 			}
 
-			void exec(Args&&... args)
+			void operator()(Args&&... args)
 			{
 				if (_function)
 					_function(std::forward<Args>(args)...);
 			}
 	};
-
-	//Base class for parameter pack so its able to combine it with polymorphism
-	class base_param_pack{};
-
-	//Variadic parameter pack
-	template<class... Args>
-	class param_pack{};
 
 	class BaseMessage
 	{
@@ -72,62 +92,46 @@ namespace pin
 		//Text of the message
 		std::string _messageText;
 
-		//Hash generated to check the type of the passed parameter pack
-		std::size_t _parameterHash;
-
-		//Hashing function
-		virtual void createHash() {};
+		//Ptr to identifying param_pack
+		std::unique_ptr<base_param_pack> _paramPack;
 
 	public:
+
 		//Default constructor
 		BaseMessage() :
-			_messageText(PIN_BLANK),
-			_parameterHash(0)
+			_messageText(BLANK_MESSAGE_NAME)
 		{}
 
 		//Constructing with the message name
 		BaseMessage(const std::string& messageName) :
-			_messageText(messageName),
-			_parameterHash(0)
+			_messageText(messageName)
 		{}
 
 		virtual ~BaseMessage() {};
 
 		virtual void clearListeners() = 0;
 
-		//Checking the parameter hashes
-		bool haveSameParameterHash(const std::size_t& paramHash)
-		{
-			return (_parameterHash == paramHash);
-		}
-
 		//Setting the message text
 		void setMessageText(const std::string& text) { _messageText = text; }
 		const std::string& getMessageText() { return _messageText; }
-	};
 
-	//Forward declarated handler class
-	class MessageHandler;
+		//Method to compare if two messages contain same parameter packs
+		bool isSame(base_param_pack* testPack)
+		{
+			return typeid(*_paramPack) == typeid(*testPack);
+		}
+	};
 
 	template <class... Args>
 	class Message :public BaseMessage
 	{
-		friend class MessageHandler;
-		typedef std::pair<bool*, variadicFunction<Args...>> listener;
+		typedef std::pair<bool*, VariadicFunction<Args...>> listener;
 	private:
 
 		//Vector of listeners represented as variadic functions
 		std::vector<listener> _listeners;
 
 	protected:
-
-		void createHash() override
-		{
-			param_pack<Args...> tmpPack;
-
-			//Save the ID of the pack
-			_parameterHash = typeid(tmpPack).hash_code();
-		}
 
 		//Function checking if the listener exists or not
 		bool isValidListener(const listener& listener)
@@ -138,29 +142,29 @@ namespace pin
 		void clearListeners() override
 		{
 			//Erase-remove idiom
-			_listeners.erase(std::remove_if
-							(
-							_listeners.begin(),
-							_listeners.end(),
-							[](const listener& listener) 
-							{
-								return !*listener.first;
-							}
-							),
+			_listeners.erase(std::remove_if(
+											_listeners.begin(),
+											_listeners.end(),
+											[](const listener& listener) 
+											{
+												return !*listener.first;
+											}
+											),
 							_listeners.end());
 		}
 
 	public:
 
 		Message():
+			BaseMessage()
 		{
-			createHash();
+			_paramPack = std::make_unique<param_pack<Args...>>();
 		}
 
 		Message(const std::string& messageName) :
 			BaseMessage(messageName)
 		{
-			createHash();
+			_paramPack = std::make_unique<param_pack<Args...>>();
 		}
 
 		//Broadcasting the message - no check if the parameter pack sets the hash
@@ -168,19 +172,30 @@ namespace pin
 		{
 			for (auto& listener : _listeners)
 			{
-				listener.second.exec(std::forward<Args>(args)...);
+				listener.second(std::forward<Args>(args)...);
 			}
 		}
 
-		//Binding the function listener - no check if the parameter pack sets the hash
-		template<class T, class... Args2>
-		void bindFunction(bool* handler, void(T::*function)(Args2... args), T* ownerPtr)
+		//Binding the function listener - no check
+		template<class T>
+		void bindFunction(bool* handler, void(T::*function)(Args... args), T* ownerPtr)
 		{
 			_listeners.emplace_back();
 
 			_listeners.back().first = handler;
 
 			_listeners.back().second.bindFunction(function, ownerPtr);
+		}
+
+		//Binding the function listener - no check 
+		template<class T>
+		void bindFunction(bool* handler, std::function<void(Args...)> function)
+		{
+			_listeners.emplace_back();
+
+			_listeners.back().first = handler;
+
+			_listeners.back().second.bindFunction(function);
 		}
 	};
 
@@ -197,17 +212,17 @@ namespace pin
 			/*
 			*	Replace this with your own behaviour for giving bad hash 
 			*/
-			static void incorrectHash()
+			static void incorrectParameters(const std::string& messageName)
 			{
-				std::cout << "pin::MessageSystem : The hash of given arguments do not fit" << std::endl;
+				throw bad_message_parameters(messageName);
 			}
 
 			/*
 			*	Replace this with your own behaviour for giving bad message name
 			*/
-			static void incorrectMessage()
+			static void incorrectMessage(const std::string& messageName)
 			{
-				std::cout << "pin::MessageSystem : Message not found" << std::endl;
+				throw bad_message_name(messageName);
 			}
 
 		protected:
@@ -220,11 +235,10 @@ namespace pin
 
 				if (it != _messages.end())
 				{
-					//Create temporary hash
-					std::size_t tmpHash = typeid(param_pack<Args...>).hash_code();
+					param_pack<Args...> tmpPack;
 
-					//Check the created hash with the hash of the message
-					if (it->second->haveSameParameterHash(typeid(param_pack<Args...>).hash_code()))
+					//Check the parameter pack with the pack of the message
+					if (it->second->isSame(&tmpPack))
 					{
 						//Bind the function
 						static_cast<Message<Args...>*>(it->second.get())->bindFunction(handler, function, ownerPtr);
@@ -233,58 +247,88 @@ namespace pin
 					}
 					else
 					{
-						/*
-						* User tried to pass a different parameter pack that was passed to message when you created it. Pass your own behavior here
-						*/
-						incorrectHash();
+						// This function also throws bad_message_parameters exception
+						incorrectParameters(messageName);
 					}
 				}
 				else
 				{
-					/*
-					* User tried to find a message that does not exists, put your own behaviour here
-					*/
-					incorrectMessage();
-
+					// This function also throws bad_message_name exception
+					incorrectMessage(messageName);
 				}
 
 				return nullptr;
-		}
+			}
 
-		template<class... Args>
-		static void broadcastMessage(const std::string& messageName, Args... args)
-		{
-			//Check if the message with messageName exists
-			auto it = _messages.find(messageName);
-
-			if (it != _messages.end())
+			//Overload with the std::function
+			template<class... Args>
+			static BaseMessage* listenToMessage(bool* handler, const std::string& messageName, std::function<void(Args...)> function)
 			{
-				//Generated hash for current parameter pack
-				std::size_t tmpHash = typeid(param_pack<Args...>).hash_code();
+				//Check if the message with messageName exists
+				auto it = _messages.find(messageName);
 
-				//Check if its the right hash
-				if (it->second->haveSameParameterHash(typeid(param_pack<Args...>).hash_code()))
+				if (it != _messages.end())
 				{
-					//If its right broadcast the message
-					static_cast<Message<Args...>*>(it->second.get())->broadcast(std::forward<Args>(args)...);
+					param_pack<Args...> tmpPack;
+
+					//Check the parameter pack with the pack of the message
+					if (it->second->isSame(&tmpPack))
+					{
+						//Bind the function
+						static_cast<Message<Args...>*>(it->second.get())->bindFunction(handler, function);
+
+						return it->second.get();
+					}
+					else
+					{
+						// This function also throws bad_message_parameters exception
+						incorrectParameters(messageName);
+					}
 				}
 				else
 				{
-					incorrectHash();
+					// This function also throws bad_message_name exception
+					incorrectMessage(messageName);
+				}
+
+				return nullptr;
+			}
+
+			template<class... Args>
+			static void broadcastMessage(const std::string& messageName, Args... args)
+			{
+				//Check if the message with messageName exists
+				auto it = _messages.find(messageName);
+
+				if (it != _messages.end())
+				{
+					param_pack<Args...> tmpPack;
+
+					//Check the created hash with the hash of the message
+					if (it->second->isSame(&tmpPack))
+					{
+						//If its right broadcast the message
+						static_cast<Message<Args...>*>(it->second.get())->broadcast(std::forward<Args>(args)...);
+					}
+					else
+					{
+						incorrectParameters(messageName);
+					}
+				}
+				else
+				{
+					incorrectMessage(messageName);
 				}
 			}
-			else
-			{
-				incorrectMessage();
-			}
-		}
 
 		public:
 
 			template<class... Args>
-			static void createMessage(const std::string& messageName)
+		    static Message<Args...>* createMessage(const std::string& messageName)
 			{
 				_messages[messageName] = std::make_unique<Message<Args...>>(messageName);
+
+				return static_cast<Message<Args...>*>(_messages[messageName].get());
 			}
 	};
 
@@ -311,8 +355,35 @@ namespace pin
 				template<class T, class... Args>
 				void listenToMessage(const std::string& messageName, void(T::*function)(Args... args), T* ownerPtr)
 				{
-					//Vector of messages being listened to by this handler
+					//Add message to the vector of listened messages
 					_listenedMessages.emplace_back(MessageManager::listenToMessage(&_active, messageName, function, ownerPtr));
+				}
+
+				template<class... Args>
+				void listenToMessage(const std::string& messageName, std::function<void(Args...)> function)
+				{
+					//Add message to the vector of listened messages
+					_listenedMessages.emplace_back(MessageManager::listenToMessage(&_active, messageName, function));
+				}
+
+				template<class T, class... Args>
+				void listenToMessage(Message<Args...>* message, void(T::*function)(Args... args), T* ownerPtr)
+				{
+					//Bind the function manually
+					message->bindFunction(&_active, function, ownerPtr);
+
+					//Add message to the vector of listened messages
+					_listenedMessages.emplace_back(message);
+				}
+
+				template<class T, class... Args>
+				void listenToMessage(Message<Args...>* message, std::function<void(Args...)> function)
+				{
+					//Bind the function manually
+					message->bindFunction(&_active, function);
+
+					//Add message to the vector of listened messages
+					_listenedMessages.emplace_back(message);
 				}
 
 				template<class... Args>
@@ -320,6 +391,13 @@ namespace pin
 				{
 					//Broadcast message
 					MessageManager::broadcastMessage(messageName, args...);
+				}
+
+				template<class... Args>
+				void broadcastMessage(Message<Args...>* message, Args... args)
+				{
+					//Broadcast the message manually
+					message->broadcast(std::forward<Args>(args)...);
 				}
 
 				void deleteHandler()
