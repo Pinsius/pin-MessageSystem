@@ -10,27 +10,28 @@
 
 namespace pin
 {
+	//Unitialized message name
 	const std::string BLANK_MESSAGE_NAME = "Blank";
 
 	//Base exception class for message system exceptions
-	class message_exception : public std::runtime_error 
+	class message_exception : public std::runtime_error
 	{
-		public:
-			message_exception(const std::string& messageName):
-				std::runtime_error("Message system exception at message: " + messageName)
-			{}
+	public:
+		message_exception(const std::string& messageName) :
+			std::runtime_error("Message system exception at message: " + messageName)
+		{}
 
-			message_exception(const std::string& messageName, const std::string& errorDescription) :
-				std::runtime_error("Message system exception at message: " + messageName + "-" + errorDescription)
-			{}
+		message_exception(const std::string& messageName, const std::string& errorDescription) :
+			std::runtime_error("Message system exception at message: " + messageName + "-" + errorDescription)
+		{}
 	};
 
 	//exception thrown at bad parameters
 	class bad_message_parameters : public message_exception
 	{
-		public:
-			bad_message_parameters(const std::string& messageName) :
-				message_exception(messageName, "Bad message parameters") {};
+	public:
+		bad_message_parameters(const std::string& messageName) :
+			message_exception(messageName, "Bad message parameters") {};
 	};
 
 	//Exception thrown if no message with given name exists
@@ -43,10 +44,10 @@ namespace pin
 
 
 	//Base class for parameter pack so its able to combine it with polymorphism
-	class base_param_pack 
+	class base_param_pack
 	{
-		public:
-			virtual ~base_param_pack() {}
+	public:
+		virtual ~base_param_pack() {}
 	};
 
 	//Variadic parameter pack
@@ -57,33 +58,33 @@ namespace pin
 	template<class... Args>
 	class VariadicFunction
 	{
-		private:
-			//Functor
-			std::function<void(Args...)> _function;
+	private:
+		//Functor
+		std::function<void(Args...)> _function;
 
-		public:
-			VariadicFunction() {};
+	public:
+		VariadicFunction() {};
 
-			void bindFunction(std::function<void(Args...)> function)
+		void bindFunction(std::function<void(Args...)> function)
+		{
+			_function = function;
+		}
+
+		template<class T>
+		void bindFunction(void(T::*function)(Args... args), T* ownerPtr)
+		{
+			//Saved via lambda to avoid generic placeholders with std::bind
+			_function = [function, ownerPtr](Args... args)
 			{
-				_function = function;
-			}
+				(ownerPtr->*function)(args...);
+			};
+		}
 
-			template<class T>
-			void bindFunction(void(T::*function)(Args... args), T* ownerPtr)
-			{
-				//Saved via lambda to avoid generic placeholders with std::bind
-				_function = [function, ownerPtr](Args... args)
-				{
-					(ownerPtr->*function)(args...);
-				};
-			}
-
-			void operator()(Args&&... args)
-			{
-				if (_function)
-					_function(std::forward<Args>(args)...);
-			}
+		void operator()(Args... args)
+		{
+			if (_function)
+				_function(args...);
+		}
 	};
 
 	class BaseMessage
@@ -143,19 +144,19 @@ namespace pin
 		{
 			//Erase-remove idiom
 			_listeners.erase(std::remove_if(
-											_listeners.begin(),
-											_listeners.end(),
-											[](const listener& listener) 
-											{
-												return !*listener.first;
-											}
-											),
-							_listeners.end());
+				_listeners.begin(),
+				_listeners.end(),
+				[](const listener& listener)
+			{
+				return !*listener.first;
+			}
+			),
+				_listeners.end());
 		}
 
 	public:
 
-		Message():
+		Message() :
 			BaseMessage()
 		{
 			_paramPack = std::make_unique<param_pack<Args...>>();
@@ -206,207 +207,214 @@ namespace pin
 	{
 		friend class MessageHandler;
 
-		private:
-			static MessageMap _messages;
+	private:
+		MessageMap _messages;
 
-			/*
-			*	Replace this with your own behaviour for giving bad hash 
-			*/
-			static void incorrectParameters(const std::string& messageName)
+		/*
+		*	Replace this with your own behaviour for giving bad hash
+		*/
+		void incorrectParameters(const std::string& messageName)
+		{
+			throw bad_message_parameters(messageName);
+		}
+
+		/*
+		*	Replace this with your own behaviour for giving bad message name
+		*/
+		void incorrectMessage(const std::string& messageName)
+		{
+			throw bad_message_name(messageName);
+		}
+
+	protected:
+
+		template<class T, class... Args>
+		BaseMessage* listenToMessage(bool* handler, const std::string& messageName, void(T::*function)(Args... args), T* ownerPtr)
+		{
+			//Check if the message with messageName exists
+			auto it = _messages.find(messageName);
+
+			if (it != _messages.end())
 			{
-				throw bad_message_parameters(messageName);
-			}
+				param_pack<Args...> tmpPack;
 
-			/*
-			*	Replace this with your own behaviour for giving bad message name
-			*/
-			static void incorrectMessage(const std::string& messageName)
-			{
-				throw bad_message_name(messageName);
-			}
-
-		protected:
-
-			template<class T, class... Args>
-			static BaseMessage* listenToMessage(bool* handler, const std::string& messageName, void(T::*function)(Args... args), T* ownerPtr)
-			{
-				//Check if the message with messageName exists
-				auto it = _messages.find(messageName);
-
-				if (it != _messages.end())
+				//Check the parameter pack with the pack of the message
+				if (it->second->isSame(&tmpPack))
 				{
-					param_pack<Args...> tmpPack;
+					//Bind the function
+					static_cast<Message<Args...>*>(it->second.get())->bindFunction(handler, function, ownerPtr);
 
-					//Check the parameter pack with the pack of the message
-					if (it->second->isSame(&tmpPack))
-					{
-						//Bind the function
-						static_cast<Message<Args...>*>(it->second.get())->bindFunction(handler, function, ownerPtr);
-
-						return it->second.get();
-					}
-					else
-					{
-						// This function also throws bad_message_parameters exception
-						incorrectParameters(messageName);
-					}
+					return it->second.get();
 				}
 				else
 				{
-					// This function also throws bad_message_name exception
-					incorrectMessage(messageName);
+					// This function also throws bad_message_parameters exception
+					incorrectParameters(messageName);
 				}
-
-				return nullptr;
+			}
+			else
+			{
+				// This function also throws bad_message_name exception
+				incorrectMessage(messageName);
 			}
 
-			//Overload with the std::function
-			template<class... Args>
-			static BaseMessage* listenToMessage(bool* handler, const std::string& messageName, std::function<void(Args...)> function)
+			return nullptr;
+		}
+
+		//Overload with the std::function
+		template<class... Args>
+		BaseMessage* listenToMessage(bool* handler, const std::string& messageName, std::function<void(Args...)> function)
+		{
+			//Check if the message with messageName exists
+			auto it = _messages.find(messageName);
+
+			if (it != _messages.end())
 			{
-				//Check if the message with messageName exists
-				auto it = _messages.find(messageName);
+				param_pack<Args...> tmpPack;
 
-				if (it != _messages.end())
+				//Check the parameter pack with the pack of the message
+				if (it->second->isSame(&tmpPack))
 				{
-					param_pack<Args...> tmpPack;
+					//Bind the function
+					static_cast<Message<Args...>*>(it->second.get())->bindFunction(handler, function);
 
-					//Check the parameter pack with the pack of the message
-					if (it->second->isSame(&tmpPack))
-					{
-						//Bind the function
-						static_cast<Message<Args...>*>(it->second.get())->bindFunction(handler, function);
-
-						return it->second.get();
-					}
-					else
-					{
-						// This function also throws bad_message_parameters exception
-						incorrectParameters(messageName);
-					}
+					return it->second.get();
 				}
 				else
 				{
-					// This function also throws bad_message_name exception
-					incorrectMessage(messageName);
+					// This function also throws bad_message_parameters exception
+					incorrectParameters(messageName);
 				}
-
-				return nullptr;
+			}
+			else
+			{
+				// This function also throws bad_message_name exception
+				incorrectMessage(messageName);
 			}
 
-			template<class... Args>
-			static void broadcastMessage(const std::string& messageName, Args... args)
+			return nullptr;
+		}
+
+		template<class... Args>
+		void broadcastMessage(const std::string& messageName, Args... args)
+		{
+			//Check if the message with messageName exists
+			auto it = _messages.find(messageName);
+
+			if (it != _messages.end())
 			{
-				//Check if the message with messageName exists
-				auto it = _messages.find(messageName);
+				param_pack<Args...> tmpPack;
 
-				if (it != _messages.end())
+				//Check the created hash with the hash of the message
+				if (it->second->isSame(&tmpPack))
 				{
-					param_pack<Args...> tmpPack;
-
-					//Check the created hash with the hash of the message
-					if (it->second->isSame(&tmpPack))
-					{
-						//If its right broadcast the message
-						static_cast<Message<Args...>*>(it->second.get())->broadcast(std::forward<Args>(args)...);
-					}
-					else
-					{
-						incorrectParameters(messageName);
-					}
+					//If its right broadcast the message
+					static_cast<Message<Args...>*>(it->second.get())->broadcast(std::forward<Args>(args)...);
 				}
 				else
 				{
-					incorrectMessage(messageName);
+					incorrectParameters(messageName);
 				}
 			}
-
-		public:
-
-			template<class... Args>
-		    static Message<Args...>* createMessage(const std::string& messageName)
+			else
 			{
-				_messages[messageName] = std::make_unique<Message<Args...>>(messageName);
-
-				return static_cast<Message<Args...>*>(_messages[messageName].get());
+				incorrectMessage(messageName);
 			}
+		}
+
+	public:
+
+		template<class... Args>
+	    Message<Args...>* createMessage(const std::string& messageName)
+		{
+			_messages[messageName] = std::make_unique<Message<Args...>>(messageName);
+
+			return static_cast<Message<Args...>*>(_messages[messageName].get());
+		}
 	};
 
-	MessageMap MessageManager::_messages;
 
 	//Class that can listen to messages or broadcast them
 	class MessageHandler
 	{
-			private:
-				bool _active;
+	private:
+		bool _active;
 
-				std::vector<BaseMessage*> _listenedMessages;
-			public:
+		std::vector<BaseMessage*> _listenedMessages;
 
-				MessageHandler():
-					_active(true){}
+		MessageManager* _manager;
+	public:
 
-				~MessageHandler()
-				{
-					if (_active)
-						deleteHandler();
-				}
+		MessageHandler() :
+			_active(true),
+			_manager(nullptr){}
 
-				template<class T, class... Args>
-				void listenToMessage(const std::string& messageName, void(T::*function)(Args... args), T* ownerPtr)
-				{
-					//Add message to the vector of listened messages
-					_listenedMessages.emplace_back(MessageManager::listenToMessage(&_active, messageName, function, ownerPtr));
-				}
+		~MessageHandler()
+		{
+			if (_active)
+				deleteHandler();
+		}
 
-				template<class... Args>
-				void listenToMessage(const std::string& messageName, std::function<void(Args...)> function)
-				{
-					//Add message to the vector of listened messages
-					_listenedMessages.emplace_back(MessageManager::listenToMessage(&_active, messageName, function));
-				}
+		void initHandler(MessageManager* manager)
+		{
+			_manager = manager;
+		}
 
-				template<class T, class... Args>
-				void listenToMessage(Message<Args...>* message, void(T::*function)(Args... args), T* ownerPtr)
-				{
-					//Bind the function manually
-					message->bindFunction(&_active, function, ownerPtr);
+		template<class T, class... Args>
+		void listenToMessage(const std::string& messageName, void(T::*function)(Args... args), T* ownerPtr)
+		{
+			//Add message to the vector of listened messages
+			_listenedMessages.emplace_back(_manager->listenToMessage(&_active, messageName, function, ownerPtr));
+		}
 
-					//Add message to the vector of listened messages
-					_listenedMessages.emplace_back(message);
-				}
+		template<class... Args>
+		void listenToMessage(const std::string& messageName, std::function<void(Args...)> function)
+		{
+			//Add message to the vector of listened messages
+			_listenedMessages.emplace_back(_manager->listenToMessage(&_active, messageName, function));
+		}
 
-				template<class T, class... Args>
-				void listenToMessage(Message<Args...>* message, std::function<void(Args...)> function)
-				{
-					//Bind the function manually
-					message->bindFunction(&_active, function);
+		template<class T, class... Args>
+		void listenToMessage(Message<Args...>* message, void(T::*function)(Args... args), T* ownerPtr)
+		{
+			//Bind the function manually
+			message->bindFunction(&_active, function, ownerPtr);
 
-					//Add message to the vector of listened messages
-					_listenedMessages.emplace_back(message);
-				}
+			//Add message to the vector of listened messages
+			_listenedMessages.emplace_back(message);
+		}
 
-				template<class... Args>
-				void broadcastMessage(const std::string& messageName, Args... args)
-				{
-					//Broadcast message
-					MessageManager::broadcastMessage(messageName, args...);
-				}
+		template<class T, class... Args>
+		void listenToMessage(Message<Args...>* message, std::function<void(Args...)> function)
+		{
+			//Bind the function manually
+			message->bindFunction(&_active, function);
 
-				template<class... Args>
-				void broadcastMessage(Message<Args...>* message, Args... args)
-				{
-					//Broadcast the message manually
-					message->broadcast(std::forward<Args>(args)...);
-				}
+			//Add message to the vector of listened messages
+			_listenedMessages.emplace_back(message);
+		}
 
-				void deleteHandler()
-				{
-					_active = false;
+		template<class... Args>
+		void broadcastMessage(const std::string& messageName, Args... args)
+		{
+			//Broadcast message
+			_manager->broadcastMessage(messageName, args...);
+		}
 
-					//All messages must clear their listeners - delete those who are inactive
-					for (auto& message : _listenedMessages)
-						message->clearListeners();
-				}
+		template<class... Args>
+		void broadcastMessage(Message<Args...>* message, Args... args)
+		{
+			//Broadcast the message manually
+			message->broadcast(std::forward<Args>(args)...);
+		}
+
+		void deleteHandler()
+		{
+			_active = false;
+
+			//All messages must clear their listeners - delete those who are inactive
+			for (auto& message : _listenedMessages)
+				message->clearListeners();
+		}
 	};
 }
